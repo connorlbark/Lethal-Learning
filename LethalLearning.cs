@@ -19,25 +19,30 @@ namespace LethalLearning
         private static bool hasSentStart = false;
         private static bool hasSentEnd = false;
         private static bool readyForData = false;
+        private static DateTime? firstRequest = null;
         private static Socket listener = null;
         private static Socket client = null;
         private static byte[] buffer = new byte[2];
+        private static GameplayEntities.PlayerEntity player = null;
+        private static GameplayEntities.PlayerEntity opponent = null;
+        private static int lastKills = 0;
+        private static int lastDeaths = 0;
+
 
         public static void Initialize()
         {
             GameObject gameObject = new GameObject("LethalLearning");
             instance = gameObject.AddComponent<LethalLearning>();
-            IPAddress ipAddr = GetLocalIPAddress();
 
+            IPAddress ipAddr = GetLocalIPAddress();
             IPEndPoint localEndpoint = new IPEndPoint(ipAddr, 3000);
             listener = new Socket(ipAddr.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             listener.Bind(localEndpoint);
             listener.Listen(10);
             listener.BeginAccept(Accept, null);
-            
+
             Console.WriteLine("Listening on " + localEndpoint.Address.ToString() + ":" + localEndpoint.Port.ToString());
             DontDestroyOnLoad(gameObject);
-            //openPipe();
         }
 
         private static void Accept(IAsyncResult r)
@@ -71,26 +76,51 @@ namespace LethalLearning
                 state = GetState();
                 if (client != null && readyForData)
                 {
+                    if (firstRequest == null)
+                    {
+                        firstRequest = DateTime.Now.AddSeconds(6.0);
+                    }
+
+                    if (DateTime.Now < firstRequest.Value)
+                    {
+                        return;
+                    }
 
                     if (World.state == NMNBAFMOBNA.IMPPNEEEKAN)
                     {
-                        SendState();
-
-                    } else if (World.state == NMNBAFMOBNA.NLJIKMKLIMC)
+                        if (player.playerData.kills > lastKills)
+                        {
+                            SendKill();
+                            lastKills = player.playerData.kills;
+                        }
+                        else if (player.playerData.deaths > lastDeaths)
+                        {
+                            SendDeath();
+                            lastDeaths = player.playerData.deaths;
+                        }
+                        else
+                        {
+                            SendState();
+                        }
+                    }
+                    else if (World.state == NMNBAFMOBNA.NLJIKMKLIMC)
                     {
                         if (hasSentEnd == false)
                         {
                             SendEnd();
-                        } else if (hasSentStart == false)
+                        }
+                        else if (hasSentStart == false)
                         {
                             SendStart();
                         }
 
-                    } else
+                    }
+                    else
                     {
                         Console.WriteLine("Ready, but nothing to report...");
                     }
-                } else
+                }
+                else
                 {
                     Console.WriteLine("Not ready yet.");
                 }
@@ -112,8 +142,8 @@ namespace LethalLearning
             var style = new GUIStyle(GUI.skin.box);
             style.alignment = TextAnchor.MiddleLeft;
 
-            if (world != null && state != null) 
-            {             
+            if (world != null && state != null)
+            {
                 //ball.ballData.ballScale;
                 GUI.Box(new Rect(10, 10, 1000, 25), "world- " + state.world.ToString() + "state: " + World.state, style);
                 GUI.Box(new Rect(10, 35, 1000, 25), "ball- " + state.ball.ToString(), style);
@@ -132,55 +162,85 @@ namespace LethalLearning
             {
                 client.Shutdown(SocketShutdown.Both);
                 client.Close();
-            } catch { }
+            }
+            catch { }
         }
 
 
-        public State GetState() 
+        public State GetState()
         {
             var ball = world.ballHandler.GetBall();
             var numPlayers = PlayerHandler.AmountPlayersIngame();
 
-            PlayerState playerState = null;
-            PlayerState enemyState = null;
             for (int i = 0; i < numPlayers; i++)
             {
 
                 // Player.Get(playerId int)
                 var playerObj = ALDOKEMAOMB.BJDPHEHJJJK(i);
+                if (playerObj == null)
+                {
+                    continue;
+                }
                 // player.get_isAI
                 var isAi = playerObj.ALBOPCLADGN;
                 // player.playerEntity 
                 var entity = playerObj.JCCIAMJEODH;
                 if (isAi)
                 {
-                    enemyState = new PlayerState(entity, ball);
+                    opponent = entity;
                 }
                 else
                 {
-                    playerState = new PlayerState(entity, ball);
+                    player = entity;
                 }
             }
-            BallState ballState = new BallState(ball);
+            PlayerState playerState = new PlayerState(player, ball);
+            PlayerState enemyState = new PlayerState(opponent, ball, player);
+            BallState ballState = new BallState(ball, player);
             WorldState worldState = new WorldState(world);
             return new State(worldState, ballState, playerState, enemyState);
         }
 
         public void SendState()
         {
-            var data = "STATE," + convertStateArrToString(state.ToArray());
+            sendStateWithAction("STATE");
+
+        }
+
+        private void sendStateWithAction(string action)
+        {
+            var data = action + "," + convertStateArrToString(state.ToArray());
             client.Send(Encoding.ASCII.GetBytes(data));
             readyForData = false;
             if (hasSentEnd == true)
             {
                 hasSentEnd = false;
+                hasSentStart = false;
             }
         }
 
+        private void sendEnd(string result)
+        {
+            var data = result + "," + convertStateArrToString(State.ZeroArray());
+            client.Send(Encoding.ASCII.GetBytes(data));
+            readyForData = false;
+            hasSentEnd = true;
+        }
+
+
         public void SendEnd()
         {
-            client.Send(Encoding.ASCII.GetBytes("END"));
+            //  NCMFHODLNAJ - Rules
+            if (player.playerData.kills > opponent.playerData.kills)
+            {
+                sendEnd("END");
+            }
+            else
+            {
+                sendEnd("LOST");
+            }
             hasSentEnd = true;
+            firstRequest = null;
         }
 
         public void SendStart()
@@ -188,6 +248,17 @@ namespace LethalLearning
             client.Send(Encoding.ASCII.GetBytes("START"));
             hasSentStart = true;
         }
+
+        public void SendDeath()
+        {
+            sendStateWithAction("DEATH");
+        }
+
+        public void SendKill()
+        {
+            sendStateWithAction("KILL");
+        }
+
 
         public string convertStateArrToString(object[] state)
         {
@@ -203,12 +274,20 @@ namespace LethalLearning
             return output.ToString();
         }
 
-       
+        public static List<object> ZeroArray(int len)
+        {
+            List<object> arr = new List<object>();
+            object[] r = new object[54];
+            Array.Copy(new int[54], 0, r, 0, 54);
+            arr.AddRange(r);
+            return arr;
+        }
     }
+}
 
     public class State
     {
-        public State(WorldState world, BallState ball, PlayerState player, PlayerState enemy) 
+        public State(WorldState world, BallState ball, PlayerState player, PlayerState enemy)
         {
             this.player = player;
             this.ball = ball;
@@ -224,7 +303,13 @@ namespace LethalLearning
             output.AddRange(this.ball.ToList());
             output.AddRange(this.world.ToList());
             return output.ToArray();
+        }
 
+        public static object[] ZeroArray()
+        {
+            object[] output = new object[54];
+            Array.Copy(new int[54], 0, output, 0, 54);
+            return output;
         }
 
         public PlayerState player;
@@ -237,9 +322,22 @@ namespace LethalLearning
     public class PlayerState
     {
 
-        public PlayerState(GameplayEntities.PlayerEntity entity, GameplayEntities.BallEntity ball)
+        public PlayerState(GameplayEntities.PlayerEntity entity, GameplayEntities.BallEntity ball, GameplayEntities.PlayerEntity player = null)
         {
-            this.position = entity.GetPosition();
+            if (entity == null)
+            {
+                isNull = true;
+                return;
+            }
+
+            if (player != null)
+            {
+                this.position = IBGCBLLKIHA.MDDEMEMPBDP(entity.GetPosition(), player.GetPosition());
+            }
+            else
+            {
+                this.position = entity.GetPosition();
+            }
             this.health = entity.hitableData.hp;
             this.velocity = entity.entityData.velocity;
             this.hasFullEnergy = entity.HasFullEnergy() ? 1 : 0;
@@ -258,7 +356,11 @@ namespace LethalLearning
 
         public List<System.Object> ToList()
         {
-            var list =  new List<System.Object> {
+            if (isNull) {
+                return LethalLearning.LethalLearning.ZeroArray(11);
+            }
+
+            var list = new List<System.Object> {
                 this.velocity.GCPKPHMKLBN.ToString(),
                 this.velocity.CGJJEHPPOAN.ToString(),
                 this.position.GCPKPHMKLBN.ToString(),
@@ -287,6 +389,7 @@ namespace LethalLearning
             return output;
         }
 
+        private bool isNull = false;
         // Vector2d
         public IBGCBLLKIHA position;
         // HitableData.hp
@@ -324,19 +427,27 @@ namespace LethalLearning
 
     public class BallState
     {
-        public BallState(GameplayEntities.BallEntity ball)
+        public BallState(GameplayEntities.BallEntity ball, GameplayEntities.PlayerEntity player)
         {
+            if (ball == null) {
+                isNull = true;
+            }
+        
             this.velocity = ball.entityData.velocity;
-            this.position = ball.GetPosition();
+            this.position = IBGCBLLKIHA.MDDEMEMPBDP(ball.GetPosition(), player.GetPosition());
         }
 
         public override string ToString()
         {
-            return " ball vel: " + this.velocity.ToString() + ", ball pos: " + this.position.ToString(); 
+            return " ball vel: " + this.velocity.ToString() + ", ball pos: " + this.position.ToString();
         }
 
-        public List<System.Object> ToList() 
+        public List<System.Object> ToList()
         {
+            if (isNull)
+            {
+                return LethalLearning.LethalLearning.ZeroArray(4);
+            }
             return new List<System.Object> {
                 this.velocity.GCPKPHMKLBN.ToString(),
                 this.velocity.CGJJEHPPOAN.ToString(),
@@ -345,18 +456,20 @@ namespace LethalLearning
             };
         }
 
+        private bool isNull = false;
         public IBGCBLLKIHA velocity;
         public IBGCBLLKIHA position;
-//        public bool isBeingBunted;
+        //        public bool isBeingBunted;
     }
 
     public class WorldState
-    {    
+    {
         public WorldState(World world) { }
 
         public override string ToString()
         {
-            switch (World.state) {
+            switch (World.state)
+            {
                 case NMNBAFMOBNA.IMPPNEEEKAN:
                     return "state: In-game";
                 case NMNBAFMOBNA.NLJIKMKLIMC:
@@ -373,6 +486,3 @@ namespace LethalLearning
             return new List<System.Object>();
         }
     }
-}
-
-
